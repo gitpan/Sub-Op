@@ -118,11 +118,11 @@ void sub_op_register(pTHX_ const sub_op_config_t *c) {
 
  if (!PL_custom_op_names)
   PL_custom_op_names = newHV();
- (void) hv_store_ent(PL_custom_op_names, key, newSVpv(c->name, c->len), 0);
+ (void) hv_store_ent(PL_custom_op_names, key, newSVpv(c->name, c->namelen), 0);
 
  if (!PL_custom_op_descs)
   PL_custom_op_descs = newHV();
- (void) hv_store_ent(PL_custom_op_descs, key, newSVpv(c->name, c->len), 0);
+ (void) hv_store_ent(PL_custom_op_descs, key, newSVpv(c->name, c->namelen), 0);
 
  if (c->check) {
   SV *check = newSViv(PTR2IV(c->check));
@@ -132,7 +132,7 @@ void sub_op_register(pTHX_ const sub_op_config_t *c) {
 
  {
   dMY_CXT;
-  (void) hv_store(MY_CXT.map, c->name, c->len, key, 0);
+  (void) hv_store(MY_CXT.map, c->name, c->namelen, key, 0);
  }
 }
 
@@ -201,7 +201,6 @@ STATIC OP *so_ck_entersub(pTHX_ OP *o) {
   gv = cGVOPx_gv(gvop);
 
   {
-   HV *stash = GvSTASH(gv);
    SV *pp_sv, **svp;
    CV *cv = NULL;
    const char *name = GvNAME(gv);
@@ -328,7 +327,7 @@ PREINIT:
  HV  *map;
  CV  *placeholder;
  tTHX owner;
-CODE:
+PPCODE:
  {
   dMY_CXT;
   owner       = MY_CXT.owner;
@@ -341,6 +340,7 @@ CODE:
   MY_CXT.placeholder = placeholder;
   MY_CXT.owner       = aTHX;
  }
+ XSRETURN(0);
 
 #endif /* SO_THREADSAFE */
 
@@ -380,4 +380,16 @@ PPCODE:
  if (!on)
   XSRETURN_UNDEF;
  ST(0) = sv_2mortal(newSVpvn(&on->buf, on->len));
+ XSRETURN(1);
+
+void
+_constant_sub(SV *sv)
+PROTOTYPE: $
+PPCODE:
+ if (!SvROK(sv))
+  XSRETURN_UNDEF;
+ sv = SvRV(sv);
+ if (SvTYPE(sv) < SVt_PVCV)
+  XSRETURN_UNDEF;
+ ST(0) = sv_2mortal(newSVuv(CvCONST(sv)));
  XSRETURN(1);

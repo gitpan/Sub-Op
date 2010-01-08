@@ -11,7 +11,7 @@ Sub::Op - Install subroutines as opcodes.
 
 =head1 VERSION
 
-Version 0.01
+Version 0.02
 
 =cut
 
@@ -20,7 +20,7 @@ our ($VERSION, @ISA);
 sub dl_load_flags { 0x01 }
 
 BEGIN {
- $VERSION = '0.01';
+ $VERSION = '0.02';
  require DynaLoader;
  push @ISA, 'DynaLoader';
  __PACKAGE__->bootstrap($VERSION);
@@ -50,11 +50,11 @@ In your XS file :
     BOOT:
     {
      sub_op_config_t c;
-     c.name  = "reftype";
-     c.len   = sizeof("reftype")-1;
-     c.pp    = scalar_util_reftype;
-     c.check = 0;
-     c.ud    = NULL;
+     c.name    = "reftype";
+     c.namelen = sizeof("reftype")-1;
+     c.pp      = scalar_util_reftype;
+     c.check   = 0;
+     c.ud      = NULL;
      sub_op_register(aTHX_ &c);
     }
 
@@ -118,6 +118,8 @@ When L<B> and L<B::Deparse> are loaded, they get automatically monkeypatched so 
 
 =cut
 
+use Scalar::Util;
+
 use B::Hooks::EndOfScope;
 use Variable::Magic 0.08;
 
@@ -140,12 +142,29 @@ my $sw = Variable::Magic::wizard(
   my $pkg = $data->{pkg};
   my $fqn = join '::', $pkg, $name;
 
-  no strict 'refs';
-  *$fqn = $placeholder unless exists &$fqn;
+  {
+   local $SIG{__WARN__} = sub {
+    CORE::warn(@_) unless $_[0] =~ /^Constant subroutine.*redefined/;
+   } if _constant_sub(do { no strict 'refs'; \&$fqn });
+   no strict 'refs';
+   no warnings 'redefine';
+   *$fqn = $placeholder;
+  }
 
   return;
  },
 );
+
+sub _tag {
+ my ($pkg, $name) = @_;
+
+ my $fqn = join '::', $pkg, $name;
+
+ return {
+  old   => _defined_sub($fqn) ? \&$fqn : undef,
+  proto => prototype($fqn),
+ };
+}
 
 sub _map {
  my ($pkg) = @_;
@@ -161,8 +180,14 @@ sub _map {
 sub _cast {
  my ($pkg, $name) = @_;
 
- no strict 'refs';
- Variable::Magic::cast(%{"${pkg}::"}, $sw, $pkg, { $name => 1 });
+ my $map = { $name => _tag(@_) };
+
+ {
+  no strict 'refs';
+  Variable::Magic::cast(%{"${pkg}::"}, $sw, $pkg, $map);
+ }
+
+ return $map;
 }
 
 sub _dispell {
@@ -190,7 +215,7 @@ Allowed to be static.
 
 =item *
 
-C<STRLEN len>
+C<STRLEN namelen>
 
 C<name>'s length, in bytes.
 
@@ -245,9 +270,15 @@ sub enable {
  my $map = _map($pkg);
 
  if (defined $map) {
-  $map->{$name} = 1;
+  $map->{$name} = _tag($pkg, $name);
  } else {
-  _cast($pkg, $name);
+  $map = _cast($pkg, $name);
+ }
+
+ my $proto = $map->{$name}->{proto};
+ if (defined $proto) {
+  no strict 'refs';
+  Scalar::Util::set_prototype(\&{"${pkg}::$name"}, undef);
  }
 
  $^H |= 0x00020000;
@@ -272,7 +303,24 @@ sub disable {
  my $pkg = @_ > 0 ? $_[0] : caller;
  my $map = _map($pkg);
 
+ my $fqn = join '::', $pkg, $name;
+
  if (defined $map) {
+  my $tag = $map->{$name};
+
+  my $old = $tag->{old};
+  if (defined $old) {
+   no strict 'refs';
+   no warnings 'redefine';
+   *$fqn = $old;
+  }
+
+  my $proto = $tag->{proto};
+  if (defined $proto) {
+   no strict 'refs';
+   Scalar::Util::set_prototype(\&$fqn, $proto);
+  }
+
   delete $map->{$name};
   unless (keys %$map) {
    _dispell($pkg);
@@ -292,6 +340,18 @@ sub _inject {
   no strict 'refs';
   *{"${pkg}::$meth"} = $code;
  }
+}
+
+sub _defined_sub {
+ my ($fqn) = @_;
+ my @parts = split /::/, $fqn;
+ my $name  = pop @parts;
+ my $pkg   = '';
+ for (@parts) {
+  $pkg .= $_ . '::';
+  return 0 unless do { no strict 'refs'; %$pkg };
+ }
+ return do { no strict 'refs'; defined &{"$pkg$name"} };
 }
 
 {
@@ -332,10 +392,11 @@ sub _inject {
    $obj->SUPER::can($meth);
   };
 
-  if (%B:: and %B::OP:: and *B::OP::type{CODE}) {
+  if (_defined_sub('B::OP::type')) {
    _inject('B::OP', \%B_OP_inject);
   } else {
-   Variable::Magic::cast %B::OP::, $injector, 'B::OP', \%B_OP_inject;
+   no strict 'refs';
+   Variable::Magic::cast %{'B::OP::'}, $injector, 'B::OP', \%B_OP_inject;
   }
 
   my $B_Deparse_inject = {
@@ -343,12 +404,13 @@ sub _inject {
     my ($self, $op, $cx) = @_;
     my $name = _custom_name($op);
     die 'unhandled custom op' unless defined $name;
-    if ($op->flags & B::OPf_STACKED()) {
+    if ($op->flags & do { no strict 'refs'; &{'B::OPf_STACKED'}() }) {
      my $kid = $op->first;
      $kid = $kid->first->sibling; # skip ex-list, pushmark
      my @exprs;
-     for (; not B::Deparse::null($kid); $kid = $kid->sibling) {
+     while (not do { no strict 'refs'; &{'B::Deparse::null'}($kid) }) {
       push @exprs, $self->deparse($kid, 6);
+      $kid = $kid->sibling;
      }
      my $args = join(", ", @exprs);
      return "$name($args)";
@@ -358,10 +420,11 @@ sub _inject {
    },
   };
 
-  if (%B:: and %B::Deparse:: and *B::Deparse::pp_entersub{CODE}) {
+  if (_defined_sub('B::Deparse::pp_entersub')) {
    _inject('B::Deparse', $B_Deparse_inject);
   } else {
-   Variable::Magic::cast %B::Deparse::, $injector, 'B::Deparse', $B_Deparse_inject;
+   no strict 'refs';
+   Variable::Magic::cast %{'B::Deparse::'}, $injector, 'B::Deparse', $B_Deparse_inject;
   }
  }
 }
@@ -371,6 +434,14 @@ BEGIN { _monkeypatch() }
 =head1 EXAMPLES
 
 See the F<t/Sub-Op-LexicalSub> directory that implements a complete example.
+
+=head1 CAVEATS
+
+Preexistent definitions of a sub whose name is handled by L<Sub::Op> are restored at the end of the lexical scope in which the module is used.
+But if you define a sub in the scope of action of L<Sub::Op> with a name that is currently being replaced, the new declaration will be obliterated at the scope end.
+
+Function calls without parenthesis inside an C<eval STRING> in the scope of the pragma won't be replaced.
+I know a few ways of fixing this, but I've not yet decided on which.
 
 =head1 DEPENDENCIES
 
@@ -383,6 +454,10 @@ L<ExtUtils::Depends>.
 =head1 SEE ALSO
 
 L<subs::auto>.
+
+L<B::Hooks::XSUB::CallAsOp> provides a C API to declare XSUBs that effectively call a specific PP function.
+Thus, it allows you to write XSUBs with the PP stack conventions used for implementing perl core keywords.
+There's no opcode replacement and no parsing hacks.
 
 L<B::Hooks::OP::Check::EntersubForCV>.
 

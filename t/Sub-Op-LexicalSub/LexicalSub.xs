@@ -75,7 +75,7 @@ PPCODE:
  if (SvROK(cb)) {
   cb = SvRV(cb);
   if (SvTYPE(cb) >= SVt_PVCV) {
-   c.name  = SvPV_const(name, c.len);
+   c.name  = SvPV_const(name, c.namelen);
    c.check = sols_check;
    c.ud    = SvREFCNT_inc(cb);
    c.pp    = sols_pp;

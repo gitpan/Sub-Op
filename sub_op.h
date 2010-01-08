@@ -8,7 +8,7 @@ typedef OP *(*sub_op_check_t)(pTHX_ OP *, void *);
 
 typedef struct {
  const char    *name;
- STRLEN         len;
+ STRLEN         namelen;
  Perl_ppaddr_t  pp;
  sub_op_check_t check;
  void          *ud;

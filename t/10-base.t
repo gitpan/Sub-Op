@@ -5,13 +5,16 @@ use warnings;
 
 use blib 't/Sub-Op-LexicalSub';
 
-use Test::More tests => 2 * 15 + 3 * 2 + 2 * 28;
+use Test::More tests => (1 + 3) * 15 + (1 + 2 * 3) * 2 + 2 * 28;
 
 our $called;
 
 {
  local $/ = "####\n";
  while (<DATA>) {
+  chomp;
+  s/\s*$//;
+
   my ($code, $params)           = split /----\s*/, $_;
   my ($names, $ret, $exp, $seq) = split /\s*#\s*/, $params;
 
@@ -51,7 +54,9 @@ our $called;
    $test .= <<"   CHECK_VIVID"
     BEGIN {
      no warnings 'uninitialized'; # Test::Builder can't get the file name
-     is *main::${name}\{CODE\}, undef, '$name: no symbol table vivification';
+     ok !exists &main::${name},  '$name: not stubbed';
+     ok !defined &main::${name}, '$name: body not defined';
+     is *main::${name}\{CODE\}, undef, '$name: empty symbol table entry';
     }
    CHECK_VIVID
   }
@@ -66,7 +71,7 @@ our $called;
 
   is $called, $calls, "@names: the hook was called the right number of times";
   if ($called < $calls) {
-   fail for $called + 1 .. $calls;
+   fail, fail for $called + 1 .. $calls;
   }
  }
 }

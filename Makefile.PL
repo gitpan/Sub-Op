@@ -14,7 +14,8 @@ $file = "lib/$file.pm";
 my %PREREQ_PM = (
  'B::Hooks::EndOfScope' => 0,
  'DynaLoader'           => 0,
- 'Variable::Magic'      => '0.39',
+ 'Scalar::Util'         => 0,
+ 'Variable::Magic'      => '0.40',
 );
 
 my %META = (
@@ -79,6 +80,7 @@ WriteMakefile(
  open my $fh, '>', $args_dat or die "open(>$args_dat): $!";
  for (@ARGV) {
   my $arg = $_;
+  $arg =~ s{\s*(['"])\s*(.*)\s*\1\s*$}{$2}s;
   $arg =~ s{([^=/.a-zA-Z0-9-])}{sprintf "[%d]", ord $1}ge;
   print $fh "$arg\n";
  }
